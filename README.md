@@ -6,25 +6,31 @@
 - **數據集**: English Wikipedia（可選 BookCorpus）
 - **框架**: PyTorch + HuggingFace Transformers
 - **分佈式**: 支持單卡 / 多卡（via Accelerate）
+- **應用演示**: Gradio Web UI（Fill-Mask / 語義相似度 / 關鍵詞提取）
 
 ## 項目結構
 
 ```
 bert_pretrain/
 ├── configs/
-│   ├── bert_base.json          # BERT-base (110M params)
-│   └── bert_small.json         # BERT-small (用於調試，~14M params)
+│   ├── bert_base.json            # BERT-base (110M params)
+│   ├── bert_medium.json          # BERT-medium (40M params, 適合 8GB 顯卡)
+│   └── bert_small.json           # BERT-small (14M params, 用於調試)
 ├── scripts/
-│   ├── download_data.sh        # 數據下載與預處理
-│   ├── train.sh                # 單卡訓練
-│   ├── train_distributed.sh    # 多卡分佈式訓練
-│   └── evaluate.sh             # 模型評估
+│   ├── setup.sh                  # 環境安裝
+│   ├── download_data.sh          # 數據下載與預處理
+│   ├── train.sh                  # 單卡訓練（通用）
+│   ├── train_rtx3070.sh          # RTX 3070 一鍵訓練（含自動下載數據）
+│   ├── train_distributed.sh      # 多卡分佈式訓練
+│   ├── evaluate.sh               # 模型評估
+│   └── run_app.sh                # 啟動 Gradio 演示應用
 ├── src/
-│   ├── dataset.py              # MLM + NSP 數據集實現
-│   ├── preprocess.py           # Wikipedia/BookCorpus 預處理
-│   ├── pretrain.py             # 單卡訓練腳本
-│   ├── pretrain_accelerate.py  # 分佈式訓練腳本 (Accelerate)
-│   └── evaluate.py             # 評估腳本 (MLM PPL + NSP Acc)
+│   ├── dataset.py                # MLM + NSP 數據集實現
+│   ├── preprocess.py             # Wikipedia/BookCorpus 預處理（支持 streaming）
+│   ├── pretrain.py               # 單卡訓練腳本
+│   ├── pretrain_accelerate.py    # 分佈式訓練腳本 (Accelerate)
+│   ├── evaluate.py               # 評估腳本 (MLM PPL + NSP Acc)
+│   └── app.py                    # Gradio 演示應用
 ├── requirements.txt
 └── README.md
 ```
@@ -35,7 +41,7 @@ bert_pretrain/
 
 ```bash
 cd bert_pretrain
-pip install -r requirements.txt
+bash scripts/setup.sh
 ```
 
 ### 1. 數據下載與預處理
@@ -44,7 +50,7 @@ pip install -r requirements.txt
 # 下載完整 Wikipedia（約需 20-40 分鐘，取決於網速）
 bash scripts/download_data.sh
 
-# 或者：僅下載少量數據用於調試
+# 僅下載少量數據用於調試
 bash scripts/download_data.sh --max_articles 10000
 
 # 同時下載 Wikipedia + BookCorpus
@@ -52,13 +58,27 @@ bash scripts/download_data.sh --dataset all
 ```
 
 數據會被處理成文檔級別的 pickle 文件，存放在 `data/processed/` 下。
+設置 `--max_articles` 時自動使用 streaming 模式，節省磁碟空間。
 
 ### 2. 訓練
 
-#### 單卡訓練
+#### RTX 3070 (8GB) 一鍵訓練（推薦）
 
 ```bash
-# BERT-small 快速調試（推薦先跑通）
+# 一鍵完成：自動下載數據 + 訓練（BERT-Medium, 10 epochs）
+bash scripts/train_rtx3070.sh
+
+# 自定義 epochs
+bash scripts/train_rtx3070.sh --epochs 15
+
+# 從 checkpoint 恢復
+bash scripts/train_rtx3070.sh --resume_from output/bert_medium/checkpoint-step4000
+```
+
+#### 單卡通用訓練
+
+```bash
+# BERT-small 快速調試
 bash scripts/train.sh --config bert_small --seq_len 128 --batch_size 64 --fp16
 
 # BERT-base 標準訓練
@@ -68,41 +88,61 @@ bash scripts/train.sh --config bert_base --seq_len 128 --batch_size 32 --epochs 
 #### 多卡分佈式訓練
 
 ```bash
-# 首次使用需配置 Accelerate
 accelerate config
-
-# 4 卡訓練
 bash scripts/train_distributed.sh --num_gpus 4 --config bert_base --batch_size 32 --fp16
-
-# 使用梯度累積模擬更大 batch size（每卡 batch=32, 累積 8 步 → 有效 batch=32×4×8=1024）
-bash scripts/train_distributed.sh --num_gpus 4 --batch_size 32 --grad_accum 8 --fp16
 ```
 
 ### 3. 評估
 
 ```bash
-bash scripts/evaluate.sh --model_path output/bert_base_seq128/final_model
+bash scripts/evaluate.sh --model_path output/bert_medium/checkpoint-final
 ```
 
 輸出指標：
 - **MLM Perplexity**: 越低越好，BERT-base 在 Wiki 上通常 ~4-8
 - **NSP Accuracy**: 通常 >95%
 
+### 4. 演示應用
+
+```bash
+bash scripts/run_app.sh
+# 或指定 checkpoint
+bash scripts/run_app.sh --model_path output/bert_medium/checkpoint-epoch5
+```
+
+應用功能：
+- **Fill-Mask**: 預測被遮蔽的詞
+- **Semantic Similarity**: 計算兩個句子的語義相似度
+- **Keyword Extraction**: 基於 MLM surprise score 的關鍵詞提取
+
+## 模型配置對比
+
+| 配置 | 參數量 | 層數 | Hidden | Heads | 推薦 GPU |
+|------|--------|------|--------|-------|----------|
+| bert_small | ~14M | 4 | 256 | 4 | 任意（調試用） |
+| bert_medium | ~40M | 8 | 512 | 8 | 8GB（RTX 3070/4060） |
+| bert_base | ~110M | 12 | 768 | 12 | 16GB+（V100/A100） |
+
+## GPU 顯存估算
+
+| 配置 | seq_len=128 | seq_len=512 |
+|------|------------|------------|
+| BERT-small, bs=64 | ~4 GB | ~8 GB |
+| BERT-medium, bs=32, fp16 | ~4-5 GB | ~10 GB |
+| BERT-base, bs=32, fp16 | ~8 GB | ~16 GB |
+
 ## 訓練策略說明
 
 ### 原始 BERT 論文的兩階段訓練
 
-原論文使用兩階段：
 1. **Phase 1**: `max_seq_length=128`，訓練 90% 的步數
 2. **Phase 2**: `max_seq_length=512`，訓練剩餘 10% 的步數
 
-執行方式：
-
 ```bash
-# Phase 1: seq_len=128, 90% steps
+# Phase 1
 bash scripts/train.sh --config bert_base --seq_len 128 --max_steps 900000 --batch_size 256 --fp16
 
-# Phase 2: seq_len=512, 從 Phase 1 的 checkpoint 繼續，10% steps
+# Phase 2
 python src/pretrain.py \
     --data_dirs data/processed/wikipedia \
     --config_file configs/bert_base.json \
@@ -110,38 +150,13 @@ python src/pretrain.py \
     --max_seq_length 512 \
     --train_batch_size 64 \
     --max_steps 100000 \
-    --learning_rate 1e-4 \
     --fp16 \
     --output_dir output/bert_base_seq512
 ```
 
-### 超參數參考（BERT-base）
-
-| 參數 | 原論文值 | 本項目默認值 |
-|------|---------|-------------|
-| Batch size | 256 | 32 (需自行調大或用梯度累積) |
-| Learning rate | 1e-4 | 1e-4 |
-| Warmup steps | 10,000 | 10% of total steps |
-| Max seq length | 128 → 512 | 128 |
-| MLM probability | 15% | 15% |
-| Weight decay | 0.01 | 0.01 |
-| Optimizer | Adam (β1=0.9, β2=0.999) | AdamW (same betas) |
-| Total steps | 1,000,000 | 由 epochs 決定 |
-
-### GPU 顯存估算
-
-| 配置 | seq_len=128 | seq_len=512 |
-|------|------------|------------|
-| BERT-small, bs=64 | ~4 GB | ~8 GB |
-| BERT-base, bs=32 | ~12 GB | ~24 GB |
-| BERT-base, bs=32, fp16 | ~8 GB | ~16 GB |
-
-> 以上為大致估算，啟用 FP16 可減少約 40% 顯存。
-
 ## 常見問題
 
 ### Q: Wikipedia 下載很慢怎麼辦？
-HuggingFace Datasets 會自動緩存到 `~/.cache/huggingface/`。如果網絡不穩定，可以設置鏡像：
 ```bash
 export HF_ENDPOINT=https://hf-mirror.com
 bash scripts/download_data.sh
@@ -160,13 +175,12 @@ python src/pretrain.py \
 ```python
 from transformers import BertForSequenceClassification, BertTokenizerFast
 
-# 加載你預訓練好的模型
 model = BertForSequenceClassification.from_pretrained(
-    "output/bert_base_seq128/final_model",
-    num_labels=2,  # 根據下游任務設置
+    "output/bert_medium/checkpoint-final",
+    num_labels=2,
 )
 tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
 ```
 
 ### Q: BookCorpus 下載失敗？
-BookCorpus 有訪問限制，下載失敗是正常的。僅使用 Wikipedia 即可完成預訓練，效果差異不大。
+BookCorpus 有訪問限制，下載失敗是正常的。僅使用 Wikipedia 即可完成預訓練。

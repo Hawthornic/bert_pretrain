@@ -45,8 +45,11 @@ def process_wikipedia(
 
     print(f"Loading Wikipedia ({language}) dataset from HuggingFace...")
     # Use the 20220301 snapshot which is well-maintained
+    # Use streaming mode when max_articles is set, to save disk space
+    use_streaming = max_articles > 0
     dataset = load_dataset(
-        "wikipedia", f"20220301.{language}", split="train", trust_remote_code=True
+        "wikipedia", f"20220301.{language}", split="train",
+        trust_remote_code=True, streaming=use_streaming,
     )
 
     documents: List[List[str]] = []
@@ -54,8 +57,9 @@ def process_wikipedia(
     skipped = 0
     total_processed = 0
 
+    total_hint = max_articles if max_articles > 0 else None
     print("Processing articles into documents...")
-    for i, article in enumerate(tqdm(dataset, desc="Processing")):
+    for i, article in enumerate(tqdm(dataset, desc="Processing", total=total_hint)):
         if max_articles > 0 and total_processed >= max_articles:
             break
 
