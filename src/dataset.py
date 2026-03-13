@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple
 
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
 from transformers import PreTrainedTokenizerFast
 
 
@@ -44,7 +45,9 @@ class BertPretrainDataset(Dataset):
     def _create_instances(self) -> List[Dict]:
         """Create training instances from documents."""
         instances = []
-        for doc_idx, document in enumerate(self.documents):
+        for doc_idx, document in enumerate(
+            tqdm(self.documents, desc="Creating training instances")
+        ):
             instances.extend(
                 self._create_instances_from_document(doc_idx, document)
             )
