@@ -20,7 +20,7 @@ python -c "
 import torch
 if torch.cuda.is_available():
     name = torch.cuda.get_device_name(0)
-    vram = torch.cuda.get_device_properties(0).total_mem / 1e9
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f'  GPU: {name}')
     print(f'  VRAM: {vram:.1f} GB')
     print(f'  CUDA: {torch.version.cuda}')
