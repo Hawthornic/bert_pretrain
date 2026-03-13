@@ -44,12 +44,11 @@ def process_wikipedia(
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Loading Wikipedia ({language}) dataset from HuggingFace...")
-    # Use the 20220301 snapshot which is well-maintained
-    # Use streaming mode when max_articles is set, to save disk space
+    # Use wikimedia/wikipedia which is the new standard Parquet-based dataset
     use_streaming = max_articles > 0
     dataset = load_dataset(
-        "wikipedia", f"20220301.{language}", split="train",
-        trust_remote_code=True, streaming=use_streaming,
+        "wikimedia/wikipedia", f"20231101.{language}", split="train",
+        streaming=use_streaming,
     )
 
     documents: List[List[str]] = []
